@@ -21,7 +21,7 @@ Here is how it can be made possible:
 - A dense seismic station network near the earthquake source can quickly detect seismic waves well before the more significant shaking will arrive at more distant population centers.
 - Data transmission to a processing center, and distribution to the end user is very fast relative to seismic travel times.
 
-![Image](waves.JPG)
+![Image](waves.jpg)
 
 **Query**: Determine if the first earthquake waves have arrived
 
@@ -34,4 +34,4 @@ Here is how it can be made possible:
 
 How would you update your results when you get more data: Having more sensors sending data will make computations more conclusive and precise (the closer to the epicenter the higher the acceleration)
 
-![Image](pipeline.JPG)
+![Image](pipeline.jpg)

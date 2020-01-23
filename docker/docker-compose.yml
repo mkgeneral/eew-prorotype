@@ -1,0 +1,19 @@
+version: '2'
+services:
+  seismic-service:
+    container_name: seismic-device
+    build:
+      context: .
+      dockerfile: Dockerfile
+      #args:
+#    environment:
+#      - DEVICE=006
+#      - RELOAD=True
+    network_mode: "host"    
+#    ports:
+#      - '9092:9090'
+    volumes:
+      - /home/maya/PycharmProjects/lambda-functions/src:/opt/app/src
+#    entrypoint: /bin/sh
+#    tty: true
+
