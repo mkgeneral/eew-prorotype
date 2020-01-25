@@ -10,6 +10,10 @@ import pandas as pd
 from openeew.data.aws import AwsDataClient
 from openeew.data.df import get_df_from_records
 
+mode = 'aws' #'local'
+servers = ['b-2.kafkacluster.et0xmo.c3.kafka.us-west-2.amazonaws.com:9092',
+           'b-1.kafkacluster.et0xmo.c3.kafka.us-west-2.amazonaws.com:9092'] if mode == 'aws' else ['localhost:9092']
+
 def get_raw_data(data_client : AwsDataClient, start_date_utc : str, end_date_utc : str, docker_device_id = None):
     print(datetime.now())
     device_id = [docker_device_id]
@@ -43,13 +47,13 @@ def main():
         country = sys.argv[1]
         docker_device_id = sys.argv[2]
         print('inputs are {}, {}'.format( country, docker_device_id))
-    docker_device_id = os.environ['DEVICE']
+#    docker_device_id = os.environ['DEVICE']
     print('device_id for this run is {}'.format(docker_device_id))
 
     logging.basicConfig(level=logging.ERROR)
     data_client = AwsDataClient('mx')
 
-    producer = KafkaProducer(bootstrap_servers=['localhost:9092'], #['127.0.0.1:9090'], #
+    producer = KafkaProducer(bootstrap_servers = servers, #['127.0.0.1:9090'], #
                             acks = 0,
                             key_serializer = lambda m: m.encode('utf-8'),
                             value_serializer = lambda m: json.dumps(m).encode('utf-8'))
