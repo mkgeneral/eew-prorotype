@@ -1,5 +1,3 @@
-
-
 -- First in-app stream and pump
 CREATE OR REPLACE STREAM "IN_APP_STREAM_001" (
    ingest_time   TIMESTAMP,
@@ -30,14 +28,14 @@ CREATE OR REPLACE PUMP "STREAM_PUMP_002" AS INSERT INTO "DESTINATION_SQL_STREAM_
 CREATE OR REPLACE STREAM "DESTINATION_SQL_STREAM_002" (
 	device_id 				VARCHAR(5), 
 	warning_acceleration 	DOUBLE,
-	warning_time			DOUBLE--,
+	warning_time			TIMESTAMP--,
 -- 	ingest_time   			TIMESTAMP
 	);
 
 -- second destination stream = min peak acceleration for the past 3 seconds 
 -- send WARNING if peak accelerations stayed above 0.5 for 3 seconds	
 CREATE OR REPLACE PUMP "STREAM_PUMP_003" AS INSERT INTO "DESTINATION_SQL_STREAM_002"
-    SELECT STREAM 	device_id, warning_acceleration, acceleration_time
+    SELECT STREAM 	device_id, warning_acceleration, TO_TIMESTAMP(cast(acceleration_time*1000 AS BIGINT))
     FROM (
         SELECT STREAM 
                 device_id,
