@@ -1,10 +1,20 @@
 import boto3
 import json
 import psycopg2
+from src.postgres_sql import *
 # from datetime import datetime
 # import time
 
-def consume_records():
+dbhost = 'postgresql.cmp8s1zeudhi.us-west-2.rds.amazonaws.com'
+dbname = 'eewdb'
+dbuser = 'postgres'
+dbpassword = 'oIDED14PpCSHHjjdg6sh'
+
+def consume_records(cur):
+    try:
+        setup_tbl(cur)
+    except psycopg2.Error as e:
+        print(e)
 
     stream_name = 'OutputWarning'
 
@@ -14,7 +24,7 @@ def consume_records():
     shard_id = response['StreamDescription']['Shards'][0]['ShardId']
     shard_iterator = kinesis.get_shard_iterator(StreamName=stream_name,
                                               ShardId=shard_id,
-                                              ShardIteratorType='LATEST') #'TRIM_HORIZON')
+                                              ShardIteratorType='LATEST') #'LATEST') #'TRIM_HORIZON')
     shard_it = shard_iterator['ShardIterator']
 
     while True:
@@ -25,6 +35,11 @@ def consume_records():
             data = json.loads(record["Data"])
             print(data)
 
+            try:
+                cur.execute(peak_accel_table_insert, tuple(data.values())) #('005', 1.2, '2020-05-05 20:20:20', '2020-05-05 20:20:20'))
+            except psycopg2.Error as e:
+                print(e)
+
         shard_it = records["NextShardIterator"]
 
         # sum = sum + data["age"]
@@ -33,38 +48,38 @@ def consume_records():
         # wait for 5 seconds
         # time.sleep(5)
 
+
+def setup_db():
+    conn = psycopg2.connect(
+        f"host={dbhost} user={dbuser} password={dbpassword}")
+    conn.set_session(autocommit=True)
+    cur = conn.cursor()
+    cur.execute(f"DROP DATABASE IF EXISTS {dbname}")
+    cur.execute(f"CREATE DATABASE {dbname} WITH ENCODING 'utf8' TEMPLATE template0")
+    conn.close()
+
+
+def setup_tbl(cur):
+    cur.execute(peak_accel_table_drop)
+    cur.execute(peak_accel_table_create)
+
+
 def main():
-    # conn = psycopg2.connect("host=postgresql.cmp8s1zeudhi.us-west-2.rds.amazonaws.com user=postgres password=oIDED14PpCSHHjjdg6sh")
-    # conn.set_session(autocommit=True)
-    # cur = conn.cursor()
-    # conn.close()
-    #
-    # cur.execute("CREATE DATABASE sparkifydb WITH ENCODING 'utf8' TEMPLATE template0")
-    conn = psycopg2.connect("host=postgresql.cmp8s1zeudhi.us-west-2.rds.amazonaws.com user=postgres password=oIDED14PpCSHHjjdg6sh")
+    # setup Postgres db and table
+    setup_db()
+
+    conn = psycopg2.connect(f"host={dbhost} dbname={dbname} user={dbuser} password={dbpassword}")
+    conn.set_session(autocommit=True)
     cur = conn.cursor()
 
-    user_table_drop = "DROP table IF EXISTS users"
-    cur.execute(user_table_drop)
-    conn.commit()
-    user_table_create = ("""CREATE TABLE IF NOT EXISTS users (user_id   int PRIMARY KEY, 
-                                                             first_name varchar NOT NULL, 
-                                                             last_name  varchar NOT NULL, 
-                                                             gender     varchar, 
-                                                             level      varchar);""")
-    cur.execute(user_table_create)
-    conn.commit()
+    try:
+        setup_tbl(cur)
+        # cur.execute(peak_accel_table_insert, ('005', 1.2, '2020-05-05 20:20:20', '2020-05-05 20:20:20'))
+    except psycopg2.Error as e:
+        print(e)
 
-    user_table_insert = ("""INSERT INTO users (user_id, first_name, last_name, gender, level) 
-                                VALUES ('1', 'abc', 'dfg', 'F', 'paid') 
-                                ON CONFLICT (user_id)
-                                DO
-                                  UPDATE
-                                  SET level = EXCLUDED.level""") #%s, %s, %s, %s, %s)
+    consume_records(cur)
 
-    cur.execute(user_table_insert) #, ['1', 'abc', 'dfg', 'F', 'paid'])
-    results = cur.execute('select * from users')
-    print(results)
-    # consume_records()
 
 if __name__ == "__main__":
     main()

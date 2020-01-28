@@ -15,21 +15,23 @@ CREATE OR REPLACE PUMP "STREAM_PUMP_001" AS INSERT INTO "IN_APP_STREAM_001"
 CREATE OR REPLACE STREAM "DESTINATION_SQL_STREAM_001" (
 	device_id 			VARCHAR(5), 
 	peak_acceleration 	DOUBLE,
-	acceleration_time	DOUBLE);
+	acceleration_time	DOUBLE,
+	ingest_time   		TIMESTAMP);
 
 -- first destination stream = peak acceleration per second (max of 32 accelerations)	
 CREATE OR REPLACE PUMP "STREAM_PUMP_002" AS INSERT INTO "DESTINATION_SQL_STREAM_001"
     SELECT STREAM 	device_id, 
 				MAX(acceleration) OVER ROW_SLIDING_WINDOW AS peak_acceleration,
-				MAX(sample_t) 	  OVER ROW_SLIDING_WINDOW AS acceleration_time
+				MAX(sample_t) 	  OVER ROW_SLIDING_WINDOW AS acceleration_time,
+				ingest_time
 	FROM "IN_APP_STREAM_001"
 	WINDOW ROW_SLIDING_WINDOW AS (PARTITION BY device_id ROWS 32 PRECEDING);
 
 CREATE OR REPLACE STREAM "DESTINATION_SQL_STREAM_002" (
 	device_id 				VARCHAR(5), 
 	warning_acceleration 	DOUBLE,
-	warning_time			TIMESTAMP--,
--- 	ingest_time   			TIMESTAMP
+	warning_time			TIMESTAMP,
+	ingest_time   			TIMESTAMP
 	);
 
 -- second destination stream = min peak acceleration for the past 3 seconds 
@@ -40,8 +42,8 @@ CREATE OR REPLACE PUMP "STREAM_PUMP_003" AS INSERT INTO "DESTINATION_SQL_STREAM_
         SELECT STREAM 
                 device_id,
 				MIN(peak_acceleration) OVER ROW_SLIDING_WINDOW AS warning_acceleration,
-				acceleration_time--,
-				-- ROWTIME
+				acceleration_time,
+				ingest_time
 	    FROM "DESTINATION_SQL_STREAM_001"
 	    WINDOW ROW_SLIDING_WINDOW AS (PARTITION BY device_id ROWS 3 PRECEDING)
 	)
