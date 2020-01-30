@@ -9,6 +9,7 @@ from openeew.data.aws import AwsDataClient
 from openeew.data.df import get_df_from_records
 import boto3
 
+produce_many = True
 
 def get_raw_data(data_client : AwsDataClient, start_date_utc : str, end_date_utc : str, docker_device_id = None):
     print(datetime.now())
@@ -43,7 +44,7 @@ def main():
         country = sys.argv[1]
         docker_device_id = sys.argv[2]
         print('inputs are {}, {}'.format( country, docker_device_id))
-#    docker_device_id = os.environ['DEVICE']
+    docker_device_id = os.environ['DEVICE']
     print('device_id for this run is {}'.format(docker_device_id))
 
     logging.basicConfig(level=logging.ERROR)
@@ -63,19 +64,33 @@ def main():
             accelerator_data = get_raw_data(data_client, start_date_utc, end_date_utc, docker_device_id)
             sleep_time = 1 / 64
 
+            i = 0
+            records = []
+
             if accelerator_data is not None and accelerator_data.size > 0:
-                print(f'Start_time: {start_date_utc}, Number of records: {str(accelerator_data.size)}')
+                num_readings = accelerator_data.size
+                print(f'Start_time: {start_date_utc}, Number of records: {str(num_readings)}')
 
                 for reading in accelerator_data.itertuples():
                     sleep(sleep_time)
 
                     device_id = str(reading.device_id)
                     data = dict(reading._asdict()) #convert named tuple to dict
-
-                    # produce asynchronously with callbacks
-                    producer.put_record(StreamName='InputReadings',
-                                        Data=json.dumps(data),
-                                        PartitionKey=device_id)
+                    print(data)
+                    if produce_many:
+                        # create a set of records to be pushed together
+                        i = i + 1
+                        record = {'Data': json.dumps(data), 'PartitionKey': device_id}
+                        records.append(record)
+                        if i%20 == 0 or i == num_readings:
+                            producer.put_records(StreamName='InputReadings',
+                                                Records=records)
+                            records = []
+                    else:
+                        # produce asynchronously with callbacks
+                        producer.put_record(StreamName='InputReadings',
+                                            Data=json.dumps(data),
+                                            PartitionKey=device_id)
             start_date = end_date
 
         print('Message published successfully.')
