@@ -1,18 +1,19 @@
 import psycopg2
 from configparser import ConfigParser
 
-ConfigParser.read('config.cfg')
+config = ConfigParser()
+config.read_file(open('config.cfg'))
 
-dbhost = ConfigParser.get('postgres', 'dbhost')
-dbname = ConfigParser.get('postgres', 'dbname')
-dbuser = ConfigParser.get('postgres', 'dbuser')
-dbpassword = ConfigParser.get('postgres', 'dbpassword')
+DBHOST = config.get('POSTGRES', 'dbhost')
+DBNAME = config.get('POSTGRES', 'dbname')
+DBUSER = config.get('POSTGRES', 'dbuser')
+DBPASSWORD = config.get('POSTGRES', 'dbpassword')
 
 def main():
     # setup Postgres db and table
     # setup_db()
 
-    conn = psycopg2.connect(f"host={dbhost} dbname={dbname} user={dbuser} password={dbpassword}")
+    conn = psycopg2.connect(f"host={DBHOST} dbname={DBNAME} user={DBUSER} password={DBPASSWORD}")
     conn.set_session(autocommit=True)
     cur = conn.cursor()
 
