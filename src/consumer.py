@@ -1,14 +1,17 @@
 import boto3
 import json
+from configparser import ConfigParser
 import psycopg2
 from src.postgres_sql import *
 # from datetime import datetime
 # import time
 
-dbhost = 'postgresql.cmp8s1zeudhi.us-west-2.rds.amazonaws.com'
-dbname = 'eewdb'
-dbuser = 'postgres'
-dbpassword = 'oIDED14PpCSHHjjdg6sh'
+ConfigParser.read('config.cfg')
+
+dbhost = ConfigParser.get('postgres', 'dbhost')
+dbname = ConfigParser.get('postgres', 'dbname')
+dbuser = ConfigParser.get('postgres', 'dbuser')
+dbpassword = ConfigParser.get('postgres', 'dbpassword')
 
 def consume_records(cur):
     try:

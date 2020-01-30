@@ -1,10 +1,12 @@
 import psycopg2
+from configparser import ConfigParser
 
-dbhost = 'postgresql.cmp8s1zeudhi.us-west-2.rds.amazonaws.com'
-dbname = 'eewdb'
-dbuser = 'postgres'
-dbpassword = 'oIDED14PpCSHHjjdg6sh'
+ConfigParser.read('config.cfg')
 
+dbhost = ConfigParser.get('postgres', 'dbhost')
+dbname = ConfigParser.get('postgres', 'dbname')
+dbuser = ConfigParser.get('postgres', 'dbuser')
+dbpassword = ConfigParser.get('postgres', 'dbpassword')
 
 def main():
     # setup Postgres db and table
