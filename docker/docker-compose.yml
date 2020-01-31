@@ -7,13 +7,16 @@ services:
       dockerfile: Dockerfile
       #args:
 #    environment:
+#      - AWS_CONFIG_FILE=/home/.aws/config
+#      - AWS_PROFILE=default
 #      - DEVICE=006
 #      - RELOAD=True
-    network_mode: "host"    
+#    network_mode: "host"    
 #    ports:
 #      - '9092:9090'
     volumes:
-      - /home/maya/PycharmProjects/lambda-functions/src:/opt/app/src
+#      - /home/maya/PycharmProjects/lambda-functions/src:/opt/app/src
+      - /home/ubuntu/code/eew-prorotype/src:/opt/app/src
+      - /home/ubuntu/.aws:/root/.aws:ro
 #    entrypoint: /bin/sh
 #    tty: true
-
