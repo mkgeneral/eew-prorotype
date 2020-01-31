@@ -11,8 +11,15 @@ import boto3
 
 produce_many = True
 
-def get_raw_data(data_client : AwsDataClient, start_date_utc : str, end_date_utc : str, docker_device_id = None):
+
+def get_raw_data(data_client : AwsDataClient,
+                 start_date : datetime,
+                 end_date : datetime,
+                 docker_device_id = None) -> None:
+    """get sensor readings from S3 using OpenEEW API"""
     print(datetime.now())
+    start_date_utc = str(start_date)
+    end_date_utc = str(end_date)
     device_id = [docker_device_id]
 
     records_df_per_device = get_df_from_records(
@@ -36,40 +43,23 @@ def get_raw_data(data_client : AwsDataClient, start_date_utc : str, end_date_utc
     return records_df
 
 
-def main():
-    # get country (= kafka topic) and device id (= kafka key) from input args
-    if len(sys.argv) != 3:
-        print('Please provide 2 arguments = country and device id')
-    else:
-        country = sys.argv[1]
-        docker_device_id = sys.argv[2]
-        print('inputs are {}, {}'.format( country, docker_device_id))
-    docker_device_id = os.environ['DEVICE']
-    print('device_id for this run is {}'.format(docker_device_id))
-
-    logging.basicConfig(level=logging.ERROR)
+def produce(country: str, docker_device_id: str, interval: timedelta, start_date: datetime) -> None:
+    """send sensor data to input Kinesis stream"""
     data_client = AwsDataClient(country)
 
     producer = boto3.client('kinesis', region_name = 'us-west-2')
     # Asynchronous by default
-
-    interval = timedelta(seconds=30)
-    start_date = datetime(2020, 1, 5, 4, 39, 0)
-
     try:
         while True:
-            start_date_utc = str(start_date)
             end_date = start_date + interval
-            end_date_utc = str(end_date)
-            accelerator_data = get_raw_data(data_client, start_date_utc, end_date_utc, docker_device_id)
+            accelerator_data = get_raw_data(data_client, start_date, end_date, docker_device_id)
             sleep_time = 1 / 64
-
             i = 0
             records = []
 
             if accelerator_data is not None and accelerator_data.size > 0:
                 num_readings = accelerator_data.size
-                print(f'Start_time: {start_date_utc}, Number of records: {str(num_readings)}')
+                print(f'Start_time: {str(start_date)}, Number of records: {str(num_readings)}')
 
                 for reading in accelerator_data.itertuples():
                     sleep(sleep_time)
@@ -98,6 +88,23 @@ def main():
         print('Exception in publishing message')
         print(str(ex))
 
+def main():
+    # get country (= kafka topic) and device id (= kafka key) from input args
+    if len(sys.argv) != 3:
+        print('Please provide 2 arguments = country and device id')
+    else:
+        country = sys.argv[1]
+        docker_device_id = sys.argv[2]
+        print('inputs are {}, {}'.format( country, docker_device_id))
+    docker_device_id = os.environ['DEVICE']
+    print('device_id for this run is {}'.format(docker_device_id))
+
+    logging.basicConfig(level=logging.ERROR)
+
+    interval = timedelta(seconds=30)
+    start_date = datetime(2020, 1, 5, 4, 39, 0)
+
+    produce(country, docker_device_id, interval, start_date)
     print('all done')
 
 if __name__ == "__main__":

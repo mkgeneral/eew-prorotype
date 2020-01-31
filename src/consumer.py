@@ -1,88 +1,121 @@
+import os
+from typing import Dict
+
 import boto3
 import json
+from collections import namedtuple
 from configparser import ConfigParser
 import psycopg2
-from src.postgres_sql import *
-# from datetime import datetime
-# import time
+import psycopg2.extras
+from postgres_sql import *
 
 config = ConfigParser()
-config.read_file(open('config.cfg'))
+config.read_file(open('postgres.cfg'))
 
 DBHOST = config.get('POSTGRES', 'dbhost')
 DBNAME = config.get('POSTGRES', 'dbname')
 DBUSER = config.get('POSTGRES', 'dbuser')
 DBPASSWORD = config.get('POSTGRES', 'dbpassword')
 
-def consume_records(cur):
+StreamDef = namedtuple('StreamDef', 'table, drop_query, create_query')
+accel_stream = StreamDef(table='peak_accel',
+                         drop_query=peak_accel_table_drop,
+                         create_query=peak_accel_table_create)
+warning_stream = StreamDef(table='warnings',
+                           drop_query=warning_table_drop,
+                           create_query=warning_table_create)
+
+STREAM_TO_TABLE = {'OutputAccelerations': accel_stream,
+                   'OutputWarning': warning_stream}
+
+COPY_MANY = True
+POSTGRES_PAGE_SIZE = 1000
+
+
+def setup_db():
+    """setup database in PostgreSQL"""
+    conn = psycopg2.connect(
+        f"host={DBHOST} user={DBUSER} password={DBPASSWORD}")
+    conn.set_session(autocommit=True)
+    cur = conn.cursor()
+    cur.execute(f"DROP DATABASE IF EXISTS {DBNAME}")
+    cur.execute(f"CREATE DATABASE {DBNAME} WITH ENCODING 'utf8' TEMPLATE template0")
+    conn.close()
+
+
+def setup_tbl(cur: psycopg2.extensions.cursor, stream_def: namedtuple) -> None:
+    """ setup destination tables in PostgreSQL"""
     try:
-        setup_tbl(cur)
+        cur.execute(stream_def.drop_query)
+        cur.execute(stream_def.create_query)
     except psycopg2.Error as e:
         print(e)
 
-    stream_name = 'OutputWarning'
+
+def setup_kinesis(stream_name: str) -> list:
+    """ setup Kinesis connection and shard iterator"""
 
     kinesis = boto3.client('kinesis')
     response = kinesis.describe_stream(StreamName=stream_name)
 
     shard_id = response['StreamDescription']['Shards'][0]['ShardId']
     shard_iterator = kinesis.get_shard_iterator(StreamName=stream_name,
-                                              ShardId=shard_id,
-                                              ShardIteratorType='LATEST') #'LATEST') #'TRIM_HORIZON')
+                                                ShardId=shard_id,
+                                                ShardIteratorType='LATEST')  # 'LATEST' or 'TRIM_HORIZON'
     shard_it = shard_iterator['ShardIterator']
+    return [kinesis, shard_it]
+
+
+def consume_records(cur: psycopg2.extensions.cursor,
+                    stream_name: str) -> None:
+    """read output stream from Kinesis after Kinesis Analytics processing"""
+    stream_def = STREAM_TO_TABLE.get(stream_name)
+    setup_tbl(cur, stream_def)
+
+    kinesis, shard_it = setup_kinesis(stream_name)
 
     while True:
-        records = kinesis.get_records(ShardIterator=shard_it,
-                                      Limit=2)
-        print(records)
-        for record in records["Records"]:
-            data = json.loads(record["Data"])
-            print(data)
+        # read records from Kinesis
+        try:
+            records = kinesis.get_records(ShardIterator=shard_it,
+                                          Limit=1000)
+        except Exception as e:
+            print(e)
 
-            try:
-                cur.execute(peak_accel_table_insert, tuple(data.values())) #('005', 1.2, '2020-05-05 20:20:20', '2020-05-05 20:20:20'))
-            except psycopg2.Error as e:
-                print(e)
+        print(len(records["Records"]))
+
+        # save records in Postgres
+        try:
+            if COPY_MANY:
+                psycopg2.extras.execute_values(
+                    cur,
+                    f"""INSERT INTO {stream_def.table} VALUES %s;""",
+                    (tuple(json.loads(record["Data"]).values()) for record in records["Records"]),
+                    page_size=POSTGRES_PAGE_SIZE)
+            else:
+                for record in records["Records"]:
+                    data = json.loads(record["Data"])
+                    print(data)
+                    cur.execute(f"""INSERT INTO {stream_def.table} VALUES %s;""",
+                                tuple(data.values())) #json.loads(record["Data"])
+        except psycopg2.Error as e:
+            print(e)
 
         shard_it = records["NextShardIterator"]
 
-        # sum = sum + data["age"]
-        # i = i + 1
-
-        # wait for 5 seconds
-        # time.sleep(5)
-
-
-def setup_db():
-    conn = psycopg2.connect(
-        f"host={dbhost} user={dbuser} password={dbpassword}")
-    conn.set_session(autocommit=True)
-    cur = conn.cursor()
-    cur.execute(f"DROP DATABASE IF EXISTS {dbname}")
-    cur.execute(f"CREATE DATABASE {dbname} WITH ENCODING 'utf8' TEMPLATE template0")
-    conn.close()
-
-
-def setup_tbl(cur):
-    cur.execute(peak_accel_table_drop)
-    cur.execute(peak_accel_table_create)
-
 
 def main():
-    # setup Postgres db and table
-    setup_db()
+    stream_name = os.environ['STREAM_NAME']
+    print('stream_name for this run is {}'.format(stream_name))
+
+    # setup Postgres db and table, do it only once
+    # setup_db()
 
     conn = psycopg2.connect(f"host={DBHOST} dbname={DBNAME} user={DBUSER} password={DBPASSWORD}")
     conn.set_session(autocommit=True)
     cur = conn.cursor()
 
-    try:
-        setup_tbl(cur)
-        # cur.execute(peak_accel_table_insert, ('005', 1.2, '2020-05-05 20:20:20', '2020-05-05 20:20:20'))
-    except psycopg2.Error as e:
-        print(e)
-
-    consume_records(cur)
+    consume_records(cur, stream_name)
 
 
 if __name__ == "__main__":
