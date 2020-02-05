@@ -1,0 +1,7 @@
+# Ignore Logs
+*.cfg
+
+# The file containing environment variables 
+*.env
+
+

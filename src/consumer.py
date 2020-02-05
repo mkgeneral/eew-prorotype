@@ -1,13 +1,15 @@
 import os
-from typing import Dict
-
 import boto3
 import json
-from collections import namedtuple
+import logging
 from configparser import ConfigParser
 import psycopg2
+import psycopg2.extensions
 import psycopg2.extras
-from postgres_sql import *
+from openeew.data.aws import AwsDataClient
+
+# from collections import namedtuple
+# from postgres_sql import *
 
 config = ConfigParser()
 config.read_file(open('postgres.cfg'))
@@ -17,105 +19,212 @@ DBNAME = config.get('POSTGRES', 'dbname')
 DBUSER = config.get('POSTGRES', 'dbuser')
 DBPASSWORD = config.get('POSTGRES', 'dbpassword')
 
-StreamDef = namedtuple('StreamDef', 'table, drop_query, create_query')
-accel_stream = StreamDef(table='peak_accel',
-                         drop_query=peak_accel_table_drop,
-                         create_query=peak_accel_table_create)
-warning_stream = StreamDef(table='warnings',
-                           drop_query=warning_table_drop,
-                           create_query=warning_table_create)
-
-STREAM_TO_TABLE = {'OutputAccelerations': accel_stream,
-                   'OutputWarning': warning_stream}
-
-COPY_MANY = True
-POSTGRES_PAGE_SIZE = 1000
+SUBSCRIBERS = config.get('SNS_SUBSCRIBERS', 'numbers')
 
 
-def setup_db():
-    """setup database in PostgreSQL"""
-    conn = psycopg2.connect(
-        f"host={DBHOST} user={DBUSER} password={DBPASSWORD}")
-    conn.set_session(autocommit=True)
-    cur = conn.cursor()
-    cur.execute(f"DROP DATABASE IF EXISTS {DBNAME}")
-    cur.execute(f"CREATE DATABASE {DBNAME} WITH ENCODING 'utf8' TEMPLATE template0")
-    conn.close()
+class AbstractStream:
+    def __init__(self, name: str, postgres_page_size: int = 1000):
+        self._stream_name = name
+        self._stream_table_name = ''
+        self._postgres_page_size = postgres_page_size
+
+    @property
+    def stream_name(self) -> str:
+        return self._stream_name
+
+    def setup_tbl(self, cur: psycopg2.extensions.cursor):
+        pass
+
+    def save_to_postgres(self, cur: psycopg2.extensions.cursor, records: list):
+        """save data from a Kinesis stream to a postgres table"""
+
+        record_iterator = (tuple(json.loads(record["Data"]).values()) for record in records)
+        psycopg2.extras.execute_values(cur,  # db cursor
+                                       f"INSERT INTO {self._stream_table_name} VALUES %s;",
+                                       record_iterator,  # iterator
+                                       page_size=self._postgres_page_size)
 
 
-def setup_tbl(cur: psycopg2.extensions.cursor, stream_def: namedtuple) -> None:
-    """ setup destination tables in PostgreSQL"""
-    try:
-        cur.execute(stream_def.drop_query)
-        cur.execute(stream_def.create_query)
-    except psycopg2.Error as e:
-        print(e)
+class OutputAccelerationStream(AbstractStream):
+    def __init__(self, name: str, postgres_page_size: int = 1000):
 
+        super(OutputAccelerationStream, self).__init__(name, postgres_page_size)
+        self._stream_table_name = 'peak_accel'
 
-def setup_kinesis(stream_name: str) -> list:
-    """ setup Kinesis connection and shard iterator"""
-
-    kinesis = boto3.client('kinesis')
-    response = kinesis.describe_stream(StreamName=stream_name)
-
-    shard_id = response['StreamDescription']['Shards'][0]['ShardId']
-    shard_iterator = kinesis.get_shard_iterator(StreamName=stream_name,
-                                                ShardId=shard_id,
-                                                ShardIteratorType='LATEST')  # 'LATEST' or 'TRIM_HORIZON'
-    shard_it = shard_iterator['ShardIterator']
-    return [kinesis, shard_it]
-
-
-def consume_records(cur: psycopg2.extensions.cursor,
-                    stream_name: str) -> None:
-    """read output stream from Kinesis after Kinesis Analytics processing"""
-    stream_def = STREAM_TO_TABLE.get(stream_name)
-    setup_tbl(cur, stream_def)
-
-    kinesis, shard_it = setup_kinesis(stream_name)
-
-    while True:
-        # read records from Kinesis
+    def setup_tbl(self, cur: psycopg2.extensions.cursor):
+        """ setup destination tables in PostgreSQL"""
         try:
-            records = kinesis.get_records(ShardIterator=shard_it,
-                                          Limit=1000)
-        except Exception as e:
-            print(e)
-
-        print(len(records["Records"]))
-
-        # save records in Postgres
-        try:
-            if COPY_MANY:
-                psycopg2.extras.execute_values(
-                    cur,
-                    f"""INSERT INTO {stream_def.table} VALUES %s;""",
-                    (tuple(json.loads(record["Data"]).values()) for record in records["Records"]),
-                    page_size=POSTGRES_PAGE_SIZE)
-            else:
-                for record in records["Records"]:
-                    data = json.loads(record["Data"])
-                    print(data)
-                    cur.execute(f"""INSERT INTO {stream_def.table} VALUES %s;""",
-                                tuple(data.values())) #json.loads(record["Data"])
+            cur.execute(f"DROP table IF EXISTS {self._stream_table_name}")
+            cur.execute(f"""CREATE TABLE IF NOT EXISTS {self._stream_table_name} ( 
+                                device_id 				VARCHAR(5) NOT NULL, 
+                                count_acceleration    	INTEGER,
+                                peak_acceleration    	NUMERIC,
+                                acceleration_time		TIMESTAMP,                                
+                                id 						SERIAL PRIMARY KEY
+                          );""")
         except psycopg2.Error as e:
             print(e)
 
-        shard_it = records["NextShardIterator"]
+
+class OutputWarningStream(AbstractStream):
+    def __init__(self, name: str, postgres_page_size: int = 1000):
+        super(OutputWarningStream, self).__init__(name, postgres_page_size)
+        self._stream_table_name = 'warnings'
+
+    def setup_tbl(self, cur: psycopg2.extensions.cursor):
+        """ setup destination tables in PostgreSQL"""
+        try:
+            cur.execute(f"DROP table IF EXISTS {self._stream_table_name}")
+            cur.execute(f"""CREATE TABLE IF NOT EXISTS {self._stream_table_name} ( 
+                            device_id 				VARCHAR(5) NOT NULL, 
+                            warning_acceleration 	NUMERIC,
+                            warning_time			TIMESTAMP,
+                            id 						SERIAL PRIMARY KEY
+                          );""")
+        except psycopg2.Error as e:
+            print(e)
+
+
+class StreamFactory:
+
+    @staticmethod
+    def produce_stream(stream_name: str) -> AbstractStream:
+        if stream_name == 'OutputAccelerations':
+            return OutputAccelerationStream(
+                name='OutputAccelerations')
+        else:
+            return OutputWarningStream(name='OutputWarning')
+
+
+class StreamConsumer:
+    def __init__(self, stream_obj: AbstractStream,
+                 kinesis_records_limit=1000):
+        """ initialize Kinesis as consumer input,
+            SNS as alert publishing system,
+            PostgreSQL as output storage system
+        """
+        self._kinesis_records_limit = kinesis_records_limit
+        self._stream_obj = stream_obj
+
+        # set up PostgreSQL to save calculated accelerations
+        # self._setup_db()  # run this only once
+        self._connect_db()  # sets up db cursor
+        stream_obj.setup_tbl(self._cur)
+
+        # set up Kinesis to read output stream
+        self._setup_kinesis()
+
+        # setup notification system to publish alerts
+        self._setup_sns()
+
+    def _setup_db(self):
+        """setup database in PostgreSQL"""
+        conn = psycopg2.connect(f"host={DBHOST} user={DBUSER} password={DBPASSWORD}")
+        conn.set_session(autocommit=True)
+        cur = conn.cursor()
+        cur.execute(f"DROP DATABASE IF EXISTS {DBNAME}")
+        cur.execute(f"CREATE DATABASE {DBNAME} WITH ENCODING 'utf8' TEMPLATE template0")
+        conn.close()
+
+    def _connect_db(self):
+        """ connect to postgreSQL database"""
+        conn = psycopg2.connect(f"host={DBHOST} dbname={DBNAME} user={DBUSER} password={DBPASSWORD}")
+        conn.set_session(autocommit=True)
+        self._cur = conn.cursor()
+
+    def _setup_kinesis(self):
+        """ setup Kinesis connection and shard iterator"""
+
+        self._kinesis = boto3.client('kinesis')
+        response = self._kinesis.describe_stream(StreamName=self._stream_obj.stream_name)
+
+        shard_id = response['StreamDescription']['Shards'][0]['ShardId']
+        shard_iterator = self._kinesis.get_shard_iterator(StreamName=self._stream_obj.stream_name,
+                                                          ShardId=shard_id,
+                                                          ShardIteratorType='LATEST')  # 'LATEST' or 'TRIM_HORIZON'
+        self._shard_it = shard_iterator['ShardIterator']
+
+    def _setup_sns(self):
+        """ setup notification system, SNS"""
+        self._sns_client = boto3.client("sns")
+
+        # Create the topic if it doesn't exist (this is idempotent)
+        topic = self._sns_client.create_topic(Name="notifications")
+        self._topic_arn = topic['TopicArn']  # get its Amazon Resource Name
+
+        numbers = SUBSCRIBERS.split(',')
+        # Add SMS Subscribers
+        for number in numbers:
+            self._sns_client.subscribe(
+                TopicArn=self._topic_arn,
+                Protocol='sms',
+                Endpoint=number  # <-- number who'll receive an SMS message.
+            )
+
+    def _get_device_location(self, device_id: str, alert_date: str, country: str = 'mx') -> dict:
+        data_client = AwsDataClient(country)
+
+        devices = data_client.get_devices_as_of_date(alert_date)
+        location = {}
+        for device in devices:
+            if device['device_id'] == device_id:
+                location = {'latitude': device['latitude'], 'longitude': device['longitude']}
+        return location
+
+    def _send_sms(self, records: list) -> bool:
+        """ Send a message when new records show up in warnings stream
+            The closest device should send message first
+            All other devices will have a time lag
+        """
+        if records and len(records):
+            data = json.loads(records[0]["Data"])
+            location = self._get_device_location(data.get('DEVICE_ID'), data.get('WARNING_TIME')[:-4])
+            message = f"Detected ground shaking above threshold {data.get('WARNING_ACCELERATION')}, " \
+                      f"time {data.get('WARNING_TIME')}, " \
+                      f"location {str(location)}"
+
+            # Publish a message.
+            self._sns_client.publish(Message="Warning!", TopicArn=self._topic_arn)
+            self._sns_client.publish(Message=message, TopicArn=self._topic_arn)
+            return True
+        else:
+            return False
+
+    def consume_records(self) -> None:
+        """read output stream from Kinesis after Kinesis Analytics processing"""
+
+        sent_message = False
+        while True:
+            try:
+                # read records from Kinesis
+                records = self._kinesis.get_records(ShardIterator=self._shard_it, Limit=self._kinesis_records_limit)
+                print(len(records["Records"]))
+
+                # save records into Postgres, each stream corresponds to a table
+                self._stream_obj.save_to_postgres(self._cur, records["Records"])
+                self._shard_it = records["NextShardIterator"]
+
+                # TODO define how to send message only for the first device that shows up in warning stream
+                if 'warning' in self._stream_obj.stream_name.lower() and not sent_message:
+                    sent_message = self._send_sms(records["Records"])
+
+            except psycopg2.Error as e:
+                logging.error(f'Error saving data in PostgreSQL: {e}')
+            except Exception as generic:
+                logging.error(f'Error while consuming data from Kinesis: {generic}')
 
 
 def main():
+    logging.basicConfig(level=logging.INFO,
+                        format='%(asctime)s - %(levelname)s:  %(message)s',
+                        datefmt='%m/%d/%Y %I:%M:%S')
+
     stream_name = os.environ['STREAM_NAME']
-    print('stream_name for this run is {}'.format(stream_name))
+    logging.info('Stream_name is {}'.format(stream_name))
 
-    # setup Postgres db and table, do it only once
-    # setup_db()
-
-    conn = psycopg2.connect(f"host={DBHOST} dbname={DBNAME} user={DBUSER} password={DBPASSWORD}")
-    conn.set_session(autocommit=True)
-    cur = conn.cursor()
-
-    consume_records(cur, stream_name)
+    output_stream = StreamFactory.produce_stream(stream_name)
+    consumer = StreamConsumer(output_stream)
+    consumer.consume_records()
 
 
 if __name__ == "__main__":
