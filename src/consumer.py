@@ -116,6 +116,7 @@ class StreamConsumer:
 
         # setup notification system to publish alerts
         self._setup_sns()
+        self._sent_sms = {}
 
     def _setup_db(self):
         """setup database in PostgreSQL"""
@@ -178,14 +179,17 @@ class StreamConsumer:
         """
         if records and len(records):
             data = json.loads(records[0]["Data"])
-            location = self._get_device_location(data.get('DEVICE_ID'), data.get('WARNING_TIME')[:-4])
-            message = f"Detected ground shaking above threshold {data.get('WARNING_ACCELERATION')}, " \
-                      f"time {data.get('WARNING_TIME')}, " \
-                      f"location {str(location)}"
+            if self._sent_sms.get(data.get('DEVICE_ID')) is None:
+                location = self._get_device_location(data.get('DEVICE_ID'), data.get('WARNING_TIME')[:-4])
+                message = f"Detected ground shaking above threshold {data.get('WARNING_ACCELERATION')}, " \
+                          f"time {data.get('WARNING_TIME')}, " \
+                          f"location {str(location)}"
 
-            # Publish a message.
-            self._sns_client.publish(Message="Warning!", TopicArn=self._topic_arn)
-            self._sns_client.publish(Message=message, TopicArn=self._topic_arn)
+                # Publish a message.
+                self._sns_client.publish(Message="Warning!", TopicArn=self._topic_arn)
+                self._sns_client.publish(Message=message, TopicArn=self._topic_arn)
+
+                self._sent_sms.update({data.get('DEVICE_ID'): data.get('WARNING_TIME')[:-4]})
             return True
         else:
             return False
@@ -205,7 +209,7 @@ class StreamConsumer:
                 self._shard_it = records["NextShardIterator"]
 
                 # TODO define how to send message only for the first device that shows up in warning stream
-                if 'warning' in self._stream_obj.stream_name.lower() and not sent_message:
+                if 'warning' in self._stream_obj.stream_name.lower():  # and not sent_message:
                     sent_message = self._send_sms(records["Records"])
 
             except psycopg2.Error as e:
