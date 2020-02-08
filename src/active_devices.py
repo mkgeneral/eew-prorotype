@@ -40,11 +40,17 @@ def main():
     ## setup Kinesis streams
     # setup_streams()
 
+    # setup dockers for consumers of 2 output streams
+    stream_names = ['OutputWarning', 'OutputAccelerations']
+    for stream in stream_names:
+        cmd = ['docker-compose', 'run', '-e', 'STREAM_NAME={}'.format(stream), 'seismic-consumer']
+        with open("/tmp/output{}.log".format(stream), "a") as output:
+            process = Popen(cmd, stdout=output, stderr=output)
+
     ## get active seismic devices
     date_utc = '2020-01-05 00:00:01'
     active = get_active_devices(date_utc)
 
-    # devices = ['005', '006', '007']
     for device in active:
         cmd = ['docker-compose', 'run', '-e', 'DEVICE={}'.format(device), 'seismic-service']
         with open("/tmp/output{}.log".format(device), "a") as output:

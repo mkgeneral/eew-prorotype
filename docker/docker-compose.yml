@@ -15,8 +15,16 @@ services:
 #    ports:
 #      - '9092:9090'
     volumes:
-#      - /home/maya/PycharmProjects/lambda-functions/src:/opt/app/src
       - /home/ubuntu/code/eew-prorotype/src:/opt/app/src
       - /home/ubuntu/.aws:/root/.aws:ro
 #    entrypoint: /bin/sh
 #    tty: true
+  seismic-consumer:
+    container_name: seismic-stream_reader
+    build:
+      context: .
+      dockerfile: Dockerfile_c
+    volumes:
+      - /home/ubuntu/code/eew-prorotype/src:/opt/app/src
+      - /home/ubuntu/.aws:/root/.aws:ro
+

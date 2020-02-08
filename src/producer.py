@@ -126,7 +126,7 @@ def main():
     logging.info('inputs are {}, {}'.format(country, docker_device_id))
 
     # send data to message broker
-    producer = StreamProducer(docker_device_id)
+    producer = StreamProducer(docker_device_id, kinesis_produce_many=False,reading_frequency=128)
     producer.produce()
 
 

@@ -1,0 +1,9 @@
+FROM nethacker/ubuntu-18-04-python-3:python-3.7.3
+
+WORKDIR /opt/app/src
+
+COPY requirements_c.txt .
+RUN pip install -r requirements_c.txt 
+
+
+ENTRYPOINT ["python", "consumer.py"]
