@@ -2,6 +2,7 @@ import os
 import boto3
 import json
 import logging
+from datetime import datetime, timedelta
 from configparser import ConfigParser
 import psycopg2
 import psycopg2.extensions
@@ -89,9 +90,9 @@ class StreamFactory:
 
     @staticmethod
     def produce_stream(stream_name: str) -> AbstractStream:
-        if stream_name == 'OutputAccelerations':
+        if  'OutputAccelerations' in stream_name:
             return OutputAccelerationStream(
-                name='OutputAccelerations')
+                name=stream_name)
         else:
             return OutputWarningStream(name='OutputWarning')
 
@@ -179,11 +180,13 @@ class StreamConsumer:
         """
         if records and len(records):
             data = json.loads(records[0]["Data"])
-            if self._sent_sms.get(data.get('DEVICE_ID')) is None:
-                location = self._get_device_location(data.get('DEVICE_ID'), data.get('WARNING_TIME')[:-4])
+            device_id = data.get('DEVICE_ID')
+
+            if self._sent_sms.get(device_id) is None:
+                location = self._get_device_location(device_id, data.get('WARNING_TIME')[:-4])
                 message = f"Detected ground shaking above threshold {data.get('WARNING_ACCELERATION')}, " \
                           f"time {data.get('WARNING_TIME')}, " \
-                          f"location {str(location)}"
+                          f"by device {device_id} at {str(location)}"
 
                 # Publish a message.
                 self._sns_client.publish(Message="Warning!", TopicArn=self._topic_arn)
@@ -197,20 +200,32 @@ class StreamConsumer:
     def consume_records(self) -> None:
         """read output stream from Kinesis after Kinesis Analytics processing"""
 
+        # the limit is 5 reads from output stream per second = use 5 tokens per second to meter reads
+        end_time = datetime.now() + timedelta(seconds=1)
+        tokens = 5
         sent_message = False
         while True:
             try:
-                # read records from Kinesis
-                records = self._kinesis.get_records(ShardIterator=self._shard_it, Limit=self._kinesis_records_limit)
-                print(len(records["Records"]))
+                while datetime.now() <= end_time:
+                    if tokens > 0:
+                        # read records from Kinesis
+                        records = self._kinesis.get_records(ShardIterator=self._shard_it, Limit=self._kinesis_records_limit)
+                        logging.info(str(records['ResponseMetadata']['HTTPHeaders']['date']) + ' ' + str(tokens) + ' ' + str(len(records["Records"])))
+                        # logging.info(len(records["Records"]))
 
-                # save records into Postgres, each stream corresponds to a table
-                self._stream_obj.save_to_postgres(self._cur, records["Records"])
-                self._shard_it = records["NextShardIterator"]
+                        # save records into Postgres, each stream corresponds to a table
+                        self._stream_obj.save_to_postgres(self._cur, records["Records"])
+                        self._shard_it = records["NextShardIterator"]
 
-                # TODO define how to send message only for the first device that shows up in warning stream
-                if 'warning' in self._stream_obj.stream_name.lower():  # and not sent_message:
-                    sent_message = self._send_sms(records["Records"])
+                        # TODO define how to send message only for the first device that shows up in warning stream
+                        if 'warning' in self._stream_obj.stream_name.lower():  # and not sent_message:
+                            sent_message = self._send_sms(records["Records"])
+
+                        tokens -= 1
+
+                end_time = end_time + timedelta(seconds=1)
+                tokens = 5
+
 
             except psycopg2.Error as e:
                 logging.error(f'Error saving data in PostgreSQL: {e}')
@@ -227,7 +242,7 @@ def main():
     logging.info('Stream_name is {}'.format(stream_name))
 
     output_stream = StreamFactory.produce_stream(stream_name)
-    consumer = StreamConsumer(output_stream)
+    consumer = StreamConsumer(output_stream, kinesis_records_limit=10000)
     consumer.consume_records()
 
 
