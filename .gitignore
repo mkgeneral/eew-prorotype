@@ -1,5 +1,6 @@
 # Ignore Logs
 *.cfg
+!kinesis.cfg
 
 # The file containing environment variables 
 *.env
