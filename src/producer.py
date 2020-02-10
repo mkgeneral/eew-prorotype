@@ -8,6 +8,11 @@ from datetime import datetime, timedelta
 from openeew.data.aws import AwsDataClient
 from openeew.data.df import get_df_from_records
 import boto3
+from configparser import ConfigParser
+
+config = ConfigParser()
+config.read_file(open('kinesis.cfg'))
+INPUT_STREAM = config.get('KINESIS', 'input_stream')
 
 
 class StreamProducer:
@@ -15,9 +20,9 @@ class StreamProducer:
                  docker_device_id,
                  country='mx',
                  stream_name='InputReadings',
-                 start_date=datetime(2020, 1, 5, 4, 40, 0),
+                 start_date=datetime(2020, 1, 5, 4, 39, 0),
                  end_date=datetime(2020, 2, 5, 4, 40, 0),
-                 kinesis_produce_many=True,
+                 kinesis_produce_many=False,
                  kinesis_batch_size=20,
                  reading_frequency=64,  # sensor readings per second
                  reading_interval=30):  # reading raw data from S3
@@ -126,7 +131,7 @@ def main():
     logging.info('inputs are {}, {}'.format(country, docker_device_id))
 
     # send data to message broker
-    producer = StreamProducer(docker_device_id, kinesis_produce_many=False,reading_frequency=128)
+    producer = StreamProducer(docker_device_id, stream_name=INPUT_STREAM)
     producer.produce()
 
 

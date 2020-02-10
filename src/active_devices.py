@@ -1,17 +1,18 @@
 """
-...
+this script starts docker containers for
+    1. producers: 1 producer per active seismic device
+    2. output stream consumers: output accelerations and warning accelelrations
 """
 
 from openeew.data.aws import AwsDataClient
 from subprocess import Popen
-import time
-from datetime import datetime, timedelta
 from configparser import ConfigParser
 
 config = ConfigParser()
 config.read_file(open('kinesis.cfg'))
 OUTPUT_ACCEL_STREAM = config.get('KINESIS', 'output_accel_stream')
 OUTPUT_WARNING_STREAM = config.get('KINESIS', 'output_warning_stream')
+
 
 def get_active_devices(date_utc : str) -> list:
     """ get active seismic devices """
@@ -32,26 +33,15 @@ def main():
         with open("/tmp/output{}.log".format(stream), "a") as output:
             process = Popen(cmd, stdout=output, stderr=output)
 
+    # get active seismic devices
     date_utc = '2020-01-05 00:00:01'
-    date_roll = datetime.strptime(date_utc, '%Y-%m-%d %H:%M:%S')
-    interval = timedelta(days=1)
+    active = get_active_devices(date_utc)
 
-    active_set = set()
+    for device in active:
+        cmd = ['docker-compose', 'run', '-e', 'DEVICE={}'.format(device), 'seismic-service']
+        with open("/tmp/output{}.log".format(device), "a") as output:
+            process = Popen(cmd, stdout=output, stderr=output)
 
-    while date_roll < datetime.now():
-        # set up active seismic devices as stream producers in docker containers
-        active = get_active_devices(date_utc)
-        new_set = set(active)
-        to_activate = new_set - active_set
-
-        for device in to_activate:
-            cmd = ['docker-compose', 'run', '-e', 'DEVICE={}'.format(device), 'seismic-service']
-            with open("/tmp/output{}.log".format(device), "a") as output:
-                process = Popen(cmd, stdout=output, stderr=output)
-
-        date_roll = date_roll + interval
-        date_utc = date_roll.strftime('%Y-%m-%d %H:%M:%S')
-        sleep()
         #     subprocess.call("docker-compose run -e DEVICE={}  seismic-service".format(device),
         #     shell=True, stdout=output, stderr=output)
 

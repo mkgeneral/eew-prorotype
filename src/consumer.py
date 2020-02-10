@@ -20,7 +20,13 @@ DBNAME = config.get('POSTGRES', 'dbname')
 DBUSER = config.get('POSTGRES', 'dbuser')
 DBPASSWORD = config.get('POSTGRES', 'dbpassword')
 
-SUBSCRIBERS = config.get('SNS_SUBSCRIBERS', 'numbers')
+SNS_SUBSCRIBERS = config.get('SNS_SUBSCRIBERS', 'numbers')
+EMAIL_SUBSCRIBERS = config.get('EMAIL_SUBSCRIBERS', 'emails')
+
+config_kin = ConfigParser()
+config_kin.read_file(open('kinesis.cfg'))
+OUTPUT_ACCEL_STREAM = config_kin.get('KINESIS', 'output_accel_stream')
+OUTPUT_WARNING_STREAM = config_kin.get('KINESIS', 'output_warning_stream')
 
 
 class AbstractStream:
@@ -90,11 +96,11 @@ class StreamFactory:
 
     @staticmethod
     def produce_stream(stream_name: str) -> AbstractStream:
-        if  'OutputAccelerations' in stream_name:
+        if stream_name == OUTPUT_ACCEL_STREAM:
             return OutputAccelerationStream(
                 name=stream_name)
         else:
-            return OutputWarningStream(name='OutputWarning')
+            return OutputWarningStream(name=OUTPUT_WARNING_STREAM)
 
 
 class StreamConsumer:
@@ -154,7 +160,7 @@ class StreamConsumer:
         topic = self._sns_client.create_topic(Name="notifications")
         self._topic_arn = topic['TopicArn']  # get its Amazon Resource Name
 
-        numbers = SUBSCRIBERS.split(',')
+        numbers = SNS_SUBSCRIBERS.split(',')
         # Add SMS Subscribers
         for number in numbers:
             self._sns_client.subscribe(
@@ -162,6 +168,15 @@ class StreamConsumer:
                 Protocol='sms',
                 Endpoint=number  # <-- number who'll receive an SMS message.
             )
+        emails = EMAIL_SUBSCRIBERS.split(',')
+        # Add SMS Subscribers
+        for email in emails:
+            self._sns_client.subscribe(
+                TopicArn=self._topic_arn,
+                Protocol='email',
+                Endpoint=email  # <-- email address who'll receive an alert message.
+            )
+
 
     def _get_device_location(self, device_id: str, alert_date: str, country: str = 'mx') -> dict:
         data_client = AwsDataClient(country)
@@ -173,7 +188,7 @@ class StreamConsumer:
                 location = {'latitude': device['latitude'], 'longitude': device['longitude']}
         return location
 
-    def _send_sms(self, records: list) -> bool:
+    def _send_sms(self, records: list):
         """ Send a message when new records show up in warnings stream
             The closest device should send message first
             All other devices will have a time lag
@@ -182,7 +197,7 @@ class StreamConsumer:
             data = json.loads(records[0]["Data"])
             device_id = data.get('DEVICE_ID')
 
-            if self._sent_sms.get(device_id) is None:
+            if device_id not in self._sent_sms:
                 location = self._get_device_location(device_id, data.get('WARNING_TIME')[:-4])
                 message = f"Detected ground shaking above threshold {data.get('WARNING_ACCELERATION')}, " \
                           f"time {data.get('WARNING_TIME')}, " \
@@ -193,9 +208,6 @@ class StreamConsumer:
                 self._sns_client.publish(Message=message, TopicArn=self._topic_arn)
 
                 self._sent_sms.update({data.get('DEVICE_ID'): data.get('WARNING_TIME')[:-4]})
-            return True
-        else:
-            return False
 
     def consume_records(self) -> None:
         """read output stream from Kinesis after Kinesis Analytics processing"""
@@ -203,29 +215,28 @@ class StreamConsumer:
         # the limit is 5 reads from output stream per second = use 5 tokens per second to meter reads
         end_time = datetime.now() + timedelta(seconds=1)
         tokens = 5
-        sent_message = False
         while True:
             try:
                 while datetime.now() <= end_time:
                     if tokens > 0:
                         # read records from Kinesis
-                        records = self._kinesis.get_records(ShardIterator=self._shard_it, Limit=self._kinesis_records_limit)
-                        logging.info(str(records['ResponseMetadata']['HTTPHeaders']['date']) + ' ' + str(tokens) + ' ' + str(len(records["Records"])))
-                        # logging.info(len(records["Records"]))
+                        records = self._kinesis.get_records(ShardIterator=self._shard_it,
+                                                            Limit=self._kinesis_records_limit)
+                        logging.info(str(records['ResponseMetadata']['HTTPHeaders']['date']) + ' ' + str(tokens) + ' '
+                                     + str(len(records["Records"])))
 
                         # save records into Postgres, each stream corresponds to a table
                         self._stream_obj.save_to_postgres(self._cur, records["Records"])
                         self._shard_it = records["NextShardIterator"]
 
                         # TODO define how to send message only for the first device that shows up in warning stream
-                        if 'warning' in self._stream_obj.stream_name.lower():  # and not sent_message:
-                            sent_message = self._send_sms(records["Records"])
+                        if 'warning' in self._stream_obj.stream_name.lower():
+                            self._send_sms(records["Records"])
 
                         tokens -= 1
 
                 end_time = end_time + timedelta(seconds=1)
                 tokens = 5
-
 
             except psycopg2.Error as e:
                 logging.error(f'Error saving data in PostgreSQL: {e}')

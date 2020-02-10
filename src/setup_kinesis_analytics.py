@@ -2,6 +2,7 @@ import boto3
 import time
 import logging
 import sys
+from configparser import ConfigParser
 
 KINESIS_ANALYTICS_CODE = """
 -- First in-app stream and pump
@@ -86,42 +87,59 @@ TRUST_POLICY = """{
   ]
 }"""
 
+config = ConfigParser()
+config.read_file(open('kinesis.cfg'))
+
+APPNAME = config.get('KINESIS', 'app_name')
+AWS_KINESIS_ROLE = config.get('KINESIS', 'aws_kinesis_role')
+
+INPUT_STREAM = config.get('KINESIS', 'input_stream')
+OUTPUT_ACCEL_STREAM = config.get('KINESIS', 'output_accel_stream')
+OUTPUT_WARNING_STREAM = config.get('KINESIS', 'output_warning_stream')
+
+INPUT_STREAM_SHARDS = config.get('KINESIS', 'input_stream_shards')
+OUTPUT_ACCEL_STREAM_SHARDS = config.get('KINESIS', 'output_accel_stream_shards')
+OUTPUT_WARNING_STREAM_SHARDS = config.get('KINESIS', 'output_warning_stream_shards')
+
 
 class AwsSetup:
-    def __init__(self, app_name: str):
+    def __init__(self):
         self._iam_client = boto3.client('iam')
         self._kinesis_client = boto3.client('kinesis')
         self._kinesisanalytics_client = boto3.client('kinesisanalytics')
 
-        self._roleArn = self._create_role('KinesisAnalyticsRole')
-        self._application_name = app_name
-        self._input_stream_arn = self._create_stream('InputReadings-cli', 2)
-        self._output_accel_arn = self._create_stream('OutputAccelerations-cli', 1)
-        self._output_warning_arn = self._create_stream('OutputWarning-cli', 1)
+        self._roleArn = self._create_role(AWS_KINESIS_ROLE)
+        self._input_stream_arn = self._create_stream(INPUT_STREAM, INPUT_STREAM_SHARDS)
+        self._output_accel_arn = self._create_stream(OUTPUT_ACCEL_STREAM, OUTPUT_ACCEL_STREAM_SHARDS)
+        self._output_warning_arn = self._create_stream(OUTPUT_WARNING_STREAM, OUTPUT_WARNING_STREAM_SHARDS)
 
     def _create_role(self, role_name: str) -> str:
         """ create IAM role for Kinesis Analytics using predefined role"""
 
         logging.info(f'Creating IAM role for Kinesis Analytics ... ')
-        role_desc = self._iam_client.create_role(RoleName=role_name,
-                                                 AssumeRolePolicyDocument=TRUST_POLICY)
-        self._iam_client.attach_role_policy(RoleName=role_name,
-                                            PolicyArn="arn:aws:iam::aws:policy/AmazonKinesisAnalyticsFullAccess")
+        if not AwsSetup._role_exsits(role_name):
+            self._iam_client.create_role(RoleName=role_name,
+                                                     AssumeRolePolicyDocument=TRUST_POLICY)
+            self._iam_client.attach_role_policy(RoleName=role_name,
+                                                PolicyArn="arn:aws:iam::aws:policy/AmazonKinesisAnalyticsFullAccess")
+
         logging.info(f'IAM role for Kinesis Analytics has been created')
-        return role_desc.get('Role').get('Arn')
+        return self._iam_client.get_role(RoleName=role_name).get('Role').get('Arn')
 
     def _create_stream(self, stream_name: str, shards: int) -> str:
         """create kinesis stream for kinesis analytics, either input or output """
 
         logging.info(f'Creating Kinesis stream {stream_name} ... ')
-        self._kinesis_client.create_stream(StreamName=stream_name, ShardCount=shards)
 
-        # wait until stream has Active status
-        while self._kinesis_client.describe_stream_summary(StreamName=stream_name). \
-            get('StreamDescriptionSummary').get('StreamStatus') != 'ACTIVE':
-            time.sleep(2)
+        if not AwsSetup._stream_exists(stream_name):
+            self._kinesis_client.create_stream(StreamName=stream_name, ShardCount=shards)
+
+            # wait until stream has Active status
+            while self._kinesis_client.describe_stream_summary(StreamName=stream_name). \
+                    get('StreamDescriptionSummary').get('StreamStatus') != 'ACTIVE':
+                time.sleep(2)
+
         logging.info(f'Stream {stream_name} has been activated')
-
         return self._kinesis_client.describe_stream_summary(StreamName=stream_name). \
             get('StreamDescriptionSummary').get('StreamARN')
 
@@ -129,7 +147,7 @@ class AwsSetup:
         logging.info(f'Creating Kinesis Analytics application ... ')
 
         self._kinesisanalytics_client.create_application(
-            ApplicationName=self._application_name,
+            ApplicationName=APPNAME,
             ApplicationDescription='EarthquakeEarlyWarning-cli',
             Inputs=[
                 {
@@ -212,22 +230,22 @@ class AwsSetup:
         )
 
         # wait until application has Ready status
-        while self._kinesisanalytics_client.describe_application(ApplicationName=self._application_name). \
-            get('ApplicationDetail').get('ApplicationStatus') != 'READY':
+        while self._kinesisanalytics_client.describe_application(ApplicationName=APPNAME). \
+                get('ApplicationDetail').get('ApplicationStatus') != 'READY':
             time.sleep(2)
-        logging.info(f'Kinesis Analytics application {self._application_name} has been created, status = READY')
+        logging.info(f'Kinesis Analytics application {APPNAME} has been created, status = READY')
 
     @staticmethod
-    def start_application(application_name):
+    def start_application():
         logging.info(f'Starting Kinesis Analytics application ... ')
         kinesisanalytics_client = boto3.client('kinesisanalytics')
-        app_desc = kinesisanalytics_client.describe_application(ApplicationName=application_name). \
+        app_desc = kinesisanalytics_client.describe_application(ApplicationName=APPNAME). \
             get('ApplicationDetail')
 
-        kinesisanalytics_client.start_application(ApplicationName=application_name,
+        kinesisanalytics_client.start_application(ApplicationName=APPNAME,
                                                   InputConfigurations=[
                                                       {
-                                                          'Id': app_desc.get('InputDescriptions').get('InputId'),
+                                                          'Id': app_desc.get('InputDescriptions')[0].get('InputId'),
                                                           'InputStartingPositionConfiguration': {
                                                               'InputStartingPosition': 'NOW'
                                                               # |'TRIM_HORIZON'|'LAST_STOPPED_POINT'
@@ -235,44 +253,89 @@ class AwsSetup:
                                                       },
                                                   ])
         # wait until application has RUNNING status
-        while kinesisanalytics_client.describe_application(ApplicationName=application_name). \
-            get('ApplicationDetail').get('ApplicationStatus') != 'RUNNING':
+        while kinesisanalytics_client.describe_application(ApplicationName=APPNAME). \
+                get('ApplicationDetail').get('ApplicationStatus') != 'RUNNING':
             time.sleep(2)
-        logging.info(f'Kinesis Analytics application {application_name} has been started')
+        logging.info(f'Kinesis Analytics application {APPNAME} has been started')
 
     @staticmethod
-    def stop_application(application_name):
+    def stop_application():
         logging.info(f'Stopping Kinesis Analytics application ... ')
         kinesisanalytics_client = boto3.client('kinesisanalytics')
-        app_desc = kinesisanalytics_client.describe_application(ApplicationName=application_name). \
+        app_desc = kinesisanalytics_client.describe_application(ApplicationName=APPNAME). \
             get('ApplicationDetail')
 
         if app_desc.get('ApplicationStatus') == 'RUNNING':
-            kinesisanalytics_client.stop_application(ApplicationName=application_name)
+            kinesisanalytics_client.stop_application(ApplicationName=APPNAME)
 
         # wait until application has RUNNING status
-        while kinesisanalytics_client.describe_application(ApplicationName=application_name). \
-            get('ApplicationDetail').get('ApplicationStatus') != 'READY':
+        while kinesisanalytics_client.describe_application(ApplicationName=APPNAME). \
+                get('ApplicationDetail').get('ApplicationStatus') != 'READY':
             time.sleep(2)
-        logging.info(f'Kinesis Analytics application {application_name} has been stopped')
+        logging.info(f'Kinesis Analytics application {APPNAME} has been stopped')
+
+    @staticmethod
+    def _stream_exists(stream_name: str) -> bool:
+        kinesis_client = boto3.client('kinesis')
+        streams = kinesis_client.list_streams()
+        if stream_name in streams.get('StreamNames'):
+            return True
+        else:
+            return False
+
+    @staticmethod
+    def _role_exsits(role_name: str) -> bool:
+        iam_client = boto3.client('iam')
+        roles_dict = iam_client.list_roles()
+        roles_list = roles_dict.get('Roles')
+        role_names = [role.get('RoleName') for role in roles_list]
+        if role_name in role_names:
+            return True
+        else:
+            return False
+
+    @staticmethod
+    def _application_exists(app_name: str) -> bool:
+        kinesisanalytics_client = boto3.client('kinesisanalytics')
+        apps_dict = kinesisanalytics_client.list_applications()
+        apps_list = apps_dict.get('ApplicationSummaries')
+        app_names = [app.get('ApplicationName') for app in apps_list]
+        if app_name in app_names:
+            return True
+        else:
+            return False
 
     @staticmethod
     def delete_streams():
-        pass
+        logging.info(f'Deleting input and output streams ... ')
+        kinesis_client = boto3.client('kinesis')
+        if AwsSetup._stream_exists(INPUT_STREAM):
+            kinesis_client.delete_stream(StreamName=INPUT_STREAM)
+        if AwsSetup._stream_exists(OUTPUT_ACCEL_STREAM):
+            kinesis_client.delete_stream(StreamName=OUTPUT_ACCEL_STREAM)
+        if AwsSetup._stream_exists(OUTPUT_WARNING_STREAM):
+            kinesis_client.delete_stream(StreamName=OUTPUT_WARNING_STREAM)
 
     @staticmethod
     def delete_role():
-        pass
+        logging.info(f'Deleting IAM role for Kinesis Analytics ... ')
+        iam_client = boto3.client('iam')
+        if AwsSetup._role_exsits(AWS_KINESIS_ROLE):
+            iam_client.detach_role_policy(RoleName=AWS_KINESIS_ROLE,
+                                          PolicyArn="arn:aws:iam::aws:policy/AmazonKinesisAnalyticsFullAccess")
+            iam_client.delete_role(RoleName=AWS_KINESIS_ROLE)
 
     @staticmethod
-    def delete_application(application_name):
+    def delete_application():
         logging.info(f'Deleting Kinesis Analytics application ... ')
         kinesisanalytics_client = boto3.client('kinesisanalytics')
-        app_desc = kinesisanalytics_client.describe_application(ApplicationName=application_name). \
-            get('ApplicationDetail')
 
-        kinesisanalytics_client.delete_application(ApplicationName=application_name,
-                                                   CreateTimestamp=app_desc.get('CreateTimestamp'))
+        if AwsSetup._application_exists(APPNAME):
+            app_desc = kinesisanalytics_client.describe_application(ApplicationName=APPNAME). \
+                get('ApplicationDetail')
+
+            kinesisanalytics_client.delete_application(ApplicationName=APPNAME,
+                                                       CreateTimestamp=app_desc.get('CreateTimestamp'))
         AwsSetup.delete_streams()
         AwsSetup.delete_role()
 
@@ -290,16 +353,16 @@ def main():
 
     try:
         if action == 'create':
-            # creates application, streams and role
-            aws = AwsSetup('eew-cli')
+            # create role, streams and application
+            aws = AwsSetup()
             aws.create_application()
         elif action == 'start':
-            AwsSetup.start_application('eew-cli')
+            AwsSetup.start_application()
         elif action == 'stop':
-            AwsSetup.stop_application('eew-cli')
+            AwsSetup.stop_application()
         elif action == 'delete':
-            # deletes application, streams and role
-            AwsSetup.delete_application('eew-cli')
+            # delete application, streams and role
+            AwsSetup.delete_application()
         else:
             print('Action has not been recognized, please enter create, start, stop or delete')
     except Exception as e:
