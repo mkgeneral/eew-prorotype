@@ -16,7 +16,7 @@ This project is part of **Data Engineering program** at Insight, Seattle WA (win
 - A dense seismic station network near the earthquake source can quickly detect seismic waves well before the more significant shaking will arrive at more distant population centers.
 - Data transmission to a processing center, and distribution to the end user is very fast relative to seismic travel times.
 
-![Image](waves.jpg)
+![Image](images/waves.JPG)
 
 Primary Earthquake Early Warning recipients include
 - Large-Scale Utilities 
@@ -35,8 +35,8 @@ OpenEEW by Grillo ([https://registry.opendata.aws/grillo-openeew/]())
 - approximate data volume is 900GB
 - data is stored in json format
 
-![Image](data_schema.png)
+![Image](images/data_schema.png)
 
 ## Data Pipeline
 
-![Image](data_pipeline.png)
+![Image](images/data_pipeline.png)
