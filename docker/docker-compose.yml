@@ -9,16 +9,9 @@ services:
 #    environment:
 #      - AWS_CONFIG_FILE=/home/.aws/config
 #      - AWS_PROFILE=default
-#      - DEVICE=006
-#      - RELOAD=True
-#    network_mode: "host"    
-#    ports:
-#      - '9092:9090'
     volumes:
       - /home/ubuntu/code/eew-prorotype/src:/opt/app/src
       - /home/ubuntu/.aws:/root/.aws:ro
-#    entrypoint: /bin/sh
-#    tty: true
   seismic-consumer:
     container_name: seismic-stream_reader
     build:
