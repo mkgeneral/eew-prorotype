@@ -7,7 +7,7 @@ Currently, it is **impossible to predict** an earthquake. However, recent techno
 
 This project is part of **Data Engineering program** at Insight, Seattle WA (winter session of 2020)
 
-**[Project Slides]** ([http://bit.ly/2voBMc7](http://bit.ly/2voBMc7))
+**[[Project Slides](http://bit.ly/2voBMc7)]**
 
 
 ## Background
