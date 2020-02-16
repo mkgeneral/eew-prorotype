@@ -2,7 +2,7 @@
 ## __/Earthquake Early Warning/__
 
 ## Project Summary
-Currently, it is **impossible to predict** an earthquake. However, recent technological advancements made it **possible** not only **to detect** an earthquake when it begins but **to issue an early warning** as well.
+Currently, it is **impossible to predict** an earthquake. However, recent technological advancements made it **possible to detect** an earthquake when it begins and **to issue an early warning**.
 [AWS Kinesis] and [Kinesis Analytis] allow real-time processing of seismic sensors' readings and sending an alert to [AWS SNS] subscribers.  
 
 This project is part of **Data Engineering program** at Insight, Seattle WA (winter session of 2020)
