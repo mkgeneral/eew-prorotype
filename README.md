@@ -9,6 +9,8 @@ This project is part of **Data Engineering program** at Insight, Seattle WA (win
 
 **[[Project Slides](http://bit.ly/2voBMc7)]**
 
+**[[Video of Project Presentation](https://youtu.be/vls54EYqwOc)]**
+
 
 ## Background
 
